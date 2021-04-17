@@ -1,0 +1,65 @@
+name: nojs-verify
+
+# Controls when the action will run.
+on:
+  issues:
+    types: [opened, edited, reopened]
+  issue_comment:
+    types: [created]
+
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+env:
+  ISSUE_NUM: ${{ github.event.issue.number }}
+
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+jobs:
+  # This workflow contains a single job called "build"
+  get-scripts:
+    # The type of runner that the job will run on
+    runs-on: ubuntu-latest
+    if: github.event_name == 'issues' && (github.event.action == 'opened' || github.event.action == 'reopened' || github.event.action == 'edited')
+
+    # Steps represent a sequence of tasks that will be executed as part of the job
+    steps:
+
+      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+      - uses: actions/checkout@v2
+        with:
+          ref: ${{ github.head_ref }}
+
+      - uses: actions-ecosystem/action-regex-match@v2
+        id: domain-match
+        with:
+          text: ${{ github.event.issue.body }}
+          regex: '^Domain:\s*(.+)$'
+          flags: 'mg'
+
+      - id: get-scripts
+        shell: bash {0}
+        env:
+          DOMAIN: ${{ steps.domain-match.outputs.group1 }}
+        run: |
+          echo "Issue #$ISSUE_NUM, candidate $DOMAIN"
+          if grep -Fq "$DOMAIN," _data/sites.csv; then
+            echo "$DOMAIN found in sites already"
+            echo ::set-output name=comment::"Thank you for your contribution but $DOMAIN already exists in data."
+          else
+            echo "$DOMAIN not found in data.. Attempting to get page content."
+            js_out=$(curl --silent --show-error $DOMAIN | grep -F '<script')
+            echo "js snippet found: $js_out"
+            body="Javascript found on $DOMAIN:
+            \`\`\`$js_out\`\`\`"
+            body="${body//'%'/'%25'}"
+            body="${body//$'\n'/'%0A'}"
+            body="${body//$'\r'/'%0D'}"
+            echo "Comment body: $body"
+            echo ::set-output name=comment::$body
+          fi
+      - name: Create comment
+        uses: peter-evans/create-or-update-comment@v1
+        with:
+          issue-number: ${{ env.ISSUE_NUM }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          body: ${{ steps.get-scripts.outputs.comment }}
